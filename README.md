@@ -1,7 +1,7 @@
 # Hack The Box - Offensive Security Portfolio
 
 > HTB Profile: [app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63](https://app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63) &nbsp;|&nbsp; 
-> Global Rank: #861 &nbsp;
+Global Rank: #861 &nbsp;
 > Ireland Rank: #8 &nbsp;
 > Active trajectory: Global Top 100 / Ireland Top 2 &nbsp;
 > LinkedIn: [linkedin.com/in/](https://www.linkedin.com/in/rjurkevich/) &nbsp;
