@@ -1,0 +1,16 @@
+# System files
+.DS_Store
+Thumbs.db
+
+# Environments & Dependencies
+.env
+node_modules/
+venv/
+.venv/
+__pycache__/
+
+# Build artifacts
+dist/
+build/
+*.exe
+*.log
