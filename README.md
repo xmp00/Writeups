@@ -1,12 +1,14 @@
 # Hack The Box - Offensive Security Portfolio
 
-> HTB Profile: [app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63](https://app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63) &nbsp;|&nbsp; 
-Global Rank: #861 &nbsp;
-> Ireland Rank: #8 &nbsp;
-> Active trajectory: Global Top 100 / Ireland Top 2 &nbsp;
-> LinkedIn: [linkedin.com/in/](https://www.linkedin.com/in/rjurkevich/) &nbsp;
+HTB Profile: [app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63](https://app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63)
+
+Global Rank: #861 | Ireland Rank: #8
+
+Active goal: Global Top 100 | Ireland Top 2
+
+LinkedIn: [linkedin.com/in/](https://www.linkedin.com/in/rjurkevich/)
+
 > Last Updated: April 2026
----
 
 After years split across multiple platforms and the blue team/red team divide, this repository represents a deliberate consolidation. One platform. One discipline. The decision was to stop distributing effort and go deep - exclusively into offensive security, exclusively on Hack The Box, with no artificial ceiling on what gets targeted or owned. The focus is red team: web exploitation, binary analysis, Active Directory, cloud, hardware, cryptography, and the full depth of every domain encountered at Hard and Insane difficulty.
 
