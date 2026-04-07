@@ -1,11 +1,11 @@
 # Hack The Box - Offensive Security Portfolio
 
-> HTB Profile: [app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63](https://app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63) &nbsp;|&nbsp; 
-> Global Rank: #861 &nbsp;
-> Ireland Rank: #8 &nbsp;
-> Active trajectory: Global Top 100 / Ireland Top 2 &nbsp;
-> LinkedIn: [linkedin.com/in/](https://www.linkedin.com/in/rjurkevich/) &nbsp;
-> Last Updated: April 2026
+[HTB](https://app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63) | [LinkedIn](https://www.linkedin.com/in/rjurkevich/)
+
+Current rank: Global: 861 | Ireland: 8
+
+Goal: Global: TOP100 | Ireland: TOP2
+
 ---
 
 After years split across multiple platforms and the blue team/red team divide, this repository represents a deliberate consolidation. One platform. One discipline. The decision was to stop distributing effort and go deep - exclusively into offensive security, exclusively on Hack The Box, with no artificial ceiling on what gets targeted or owned. The focus is red team: web exploitation, binary analysis, Active Directory, cloud, hardware, cryptography, and the full depth of every domain encountered at Hard and Insane difficulty.
@@ -76,7 +76,7 @@ Writeups/
 
 ## Sections
 
-### [1. Challenges](./1.%20Challenges/README.md)
+### 1. Challenges
 
 Focused, single-technique tasks across eleven categories, approached through a three-phase difficulty progression: Easy (foundation), Medium (applied exploitation), Hard and Insane (research and custom tooling). Individual writeup files live inside each category folder.
 
@@ -96,7 +96,7 @@ Focused, single-technique tasks across eleven categories, approached through a t
 
 ---
 
-### [2. Machines](./2.%20Machines/README.md)
+### 2. Machines
 
 Full end-to-end machine writeups organised by operating system and difficulty tier. Each writeup covers the complete attack chain: enumeration methodology, initial access, privilege escalation, and key technique notes. Alternative approaches identified through post-completion review are noted where they differ meaningfully from the primary path.
 
@@ -105,8 +105,7 @@ Full end-to-end machine writeups organised by operating system and difficulty ti
 
 ---
 
-### [3. Pro Labs](./3.%20Pro%20Labs/README.md)
-
+### 3. Pro Labs
 Enterprise-scale network lab writeups organised by lab type and difficulty tier. Full Pro Labs are documented with engagement-style summaries covering attack chain narrative, pivoting approach, and techniques applied at each stage. Mini Pro Labs are documented per-lab with focused attack chain and technique notes. Step-by-step solutions are withheld in accordance with platform policy.
 
 - **Full Pro Labs** - Entry Level / Intermediate Level / Advanced Level / Expert Level
@@ -114,7 +113,7 @@ Enterprise-scale network lab writeups organised by lab type and difficulty tier.
 
 ---
 
-### [4. Fortress](./4.%20Fortress/README.md)
+### 4. Fortress
 
 Six partner-built, multi-flag environments, each documented as a standalone writeup file. Each file covers the reconnaissance approach, flag chain narrative, partner context, and post-completion findings.
 
@@ -129,7 +128,7 @@ Six partner-built, multi-flag environments, each documented as a standalone writ
 
 ---
 
-### [5. Sherlocks](./5.%20Sherlocks/README.md)
+### 5. Sherlocks
 
 Blue team and DFIR investigation writeups organised by difficulty tier. Each writeup documents scenario context, artefacts provided, investigative methodology, tools used, findings with reasoning, and MITRE ATT&CK technique references. Sherlocks serve a dual purpose: building DFIR fluency and informing offensive OPSEC by exposing exactly what defenders observe.
 
