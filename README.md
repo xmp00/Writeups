@@ -2,7 +2,7 @@
 
 [HTB](https://app.hackthebox.com/profile/019caac6-3992-7146-9da0-0e5ee8fb5d63) | [LinkedIn](https://www.linkedin.com/in/rjurkevich/)
 
-Current rank: Global: 861 | Ireland: 8
+UPD: 13.05.2026: Current rank: Global: 448 | Ireland: 2
 
 Goal: Global: TOP100 | Ireland: TOP2
 
