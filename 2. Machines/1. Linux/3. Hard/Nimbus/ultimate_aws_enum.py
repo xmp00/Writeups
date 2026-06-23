@@ -4,6 +4,11 @@ ultimate_aws_enum.py - Advanced AWS/LocalStack Enumeration
 
 Enumerates all AWS services accessible via the provided credentials,
 retrieving and displaying resource details, policies, tags, and more.
+
+DO NOT USE OUTSIDE OF CTF.
+SECURIY BEST PRACTICES NOT CONSIDERED IN THIS SCRIPT BY DESIGN INTENTIONALLY. 
+IF YOU USE THIS SCRIPT - YOU WILL EXPOSE CONFIDENTIAL CONFIGURATION DATA.
+
 """
 
 import boto3
