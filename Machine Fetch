@@ -1,8 +1,12 @@
+#Login to HTB
+#Go to Machines
+#Open Developer Tools network tab
+#Paste
+
 (async () => {
   const token = (() => {
     const val = localStorage.getItem('htb-token');
     if (val && val.startsWith('eyJ')) return val;
-    // fallback: search all storage
     for (const s of [localStorage, sessionStorage]) {
       for (let i = 0; i < s.length; i++) {
         const key = s.key(i);
@@ -16,32 +20,72 @@
   if (!token) { console.error('Token not found'); return; }
 
   const base = 'https://labs.hackthebox.com/api/v5/machines';
-  const params = new URLSearchParams({
-    per_page: 100,
-    // Try different state values: 'retired', 'active', 'all'
-    state: 'retired',   // change to 'all' if you want everything
-    // showCompleted: 'incomplete' // REMOVE this line to get all
-  });
-
+  const states = ['active', 'retired'];
   let all = [];
-  let page = 1;
-  let total = 1;
+  const seen = new Set();
 
-  do {
-    params.set('page', page);
-    const res = await fetch(`${base}?${params}`, {
-      headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+  for (const state of states) {
+    const params = new URLSearchParams({
+      per_page: 100,
+      state: state
     });
-    if (!res.ok) throw new Error(await res.text());
-    const data = await res.json();
-    const machines = data.data || data.machines || [];
-    all = all.concat(machines);
-    total = data.meta?.last_page || data.total_pages || 1;
-    console.log(`Page ${page}: +${machines.length} (total: ${all.length})`);
-    page++;
-  } while (page <= total);
+    let page = 1;
+    let total = 1;
+    do {
+      params.set('page', page);
+      const res = await fetch(`${base}?${params}`, {
+        headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      const machines = data.data || data.machines || [];
+      for (const m of machines) {
+        const id = m.id || m.name;
+        if (!seen.has(id)) {
+          seen.add(id);
+          all.push(m);
+        }
+      }
+      total = data.meta?.last_page || data.total_pages || 1;
+      console.log(`State ${state} page ${page}: +${machines.length} (unique total: ${all.length})`);
+      page++;
+    } while (page <= total);
+  }
 
-  console.log(`Fetched ${all.length} machines`);
-  // If still less than 541, try with state=all instead
-  return all;
+  console.log(`Total unique machines: ${all.length}`);
+
+  // Extract and sort
+  const list = all.map(m => ({
+    name: m.name || m.title,
+    os: m.os || m.operating_system || 'Unknown',
+    difficulty: m.difficulty || m.difficulty_text || 'Unknown'
+  }));
+
+  const difficultyOrder = { 'Easy': 0, 'Medium': 1, 'Hard': 2, 'Insane': 3 };
+  list.sort((a, b) => (difficultyOrder[a.difficulty] ?? 99) - (difficultyOrder[b.difficulty] ?? 99));
+
+  const grouped = {};
+  for (const m of list) {
+    if (!grouped[m.difficulty]) grouped[m.difficulty] = [];
+    grouped[m.difficulty].push(m);
+  }
+
+  const sorted = [];
+  for (const diff of ['Easy', 'Medium', 'Hard', 'Insane']) {
+    const group = grouped[diff] || [];
+    const windows = group.filter(m => m.os === 'Windows');
+    const linux = group.filter(m => m.os === 'Linux');
+    const other = group.filter(m => m.os !== 'Windows' && m.os !== 'Linux');
+    const maxLen = Math.max(windows.length, linux.length);
+    const interleaved = [];
+    for (let i = 0; i < maxLen; i++) {
+      if (i < windows.length) interleaved.push(windows[i]);
+      if (i < linux.length) interleaved.push(linux[i]);
+    }
+    sorted.push(...interleaved, ...other);
+  }
+
+  console.table(sorted);
+  // copy(JSON.stringify(sorted, null, 2));
+  return sorted;
 })();
