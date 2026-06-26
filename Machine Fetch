@@ -1,7 +1,7 @@
 #Login to HTB, open Machines page, open Console and paste below:
 
 (async () => {
-  // --- Auto-detect token ---
+  // --- Авто-поиск токена ---
   const token = (() => {
     const val = localStorage.getItem('htb-token');
     if (val && val.startsWith('eyJ')) return val;
@@ -15,17 +15,17 @@
     return null;
   })();
 
-  if (!token) { console.error('Token not found'); return; }
-  console.log('Token found');
+  if (!token) { console.error('Токен не найден'); return; }
+  console.log('Токен получен');
 
+  // --- Загружаем ВСЕ машины (retired + active) ---
   const base = 'https://labs.hackthebox.com/api/v5/machines';
   const states = ['retired', 'active'];
   let allMachines = [];
   const seenIds = new Set();
 
   for (const state of states) {
-    let page = 1;
-    let totalPages = 1;
+    let page = 1, totalPages = 1;
     const params = new URLSearchParams({
       per_page: 100,
       state: state
@@ -36,7 +36,10 @@
       const res = await fetch(`${base}?${params}`, {
         headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(`HTTP ${res.status}: ${text}`);
+      }
       const data = await res.json();
       const machines = data.data || data.machines || [];
       for (const m of machines) {
@@ -46,32 +49,24 @@
         }
       }
       totalPages = data.meta?.last_page || data.total_pages || 1;
-      console.log(`📄 State=${state}, Page ${page}: ${machines.length} machines (unique total: ${allMachines.length})`);
+      console.log(`State=${state}, Page ${page}: ${machines.length} машин (уникальных всего: ${allMachines.length})`);
       page++;
     } while (page <= totalPages);
   }
 
-  console.log(`Total unique machines fetched: ${allMachines.length}`);
+  console.log(`Всего уникальных машин: ${allMachines.length}`);
 
-  // --- Map difficulty (numeric to label) ---
-  const getDifficultyLabel = (num) => {
-    const d = num / 10;
-    if (d < 3.0) return 'Easy';
-    if (d < 4.5) return 'Medium';
-    if (d < 6.5) return 'Hard';
-    return 'Insane';
-  };
+  // --- Используем поле difficultyText для сортировки ---
+  const diffOrder = { 'Easy': 0, 'Medium': 1, 'Hard': 2, 'Insane': 3 };
 
-  // --- Build list ---
+  // --- Формируем список с правильным полем difficultyText ---
   const list = allMachines.map(m => ({
     name: m.name || '',
     os: m.os || 'Unknown',
-    difficultyNum: m.difficulty,
-    difficulty: getDifficultyLabel(m.difficulty)
+    difficulty: m.difficultyText || 'Unknown'   // теперь берём текстовую метку
   }));
 
-  // --- Sort and interleave ---
-  const diffOrder = { 'Easy': 0, 'Medium': 1, 'Hard': 2, 'Insane': 3 };
+  // --- Сортировка по сложности, затем по ОС (Windows > Linux) ---
   list.sort((a, b) => {
     if (diffOrder[a.difficulty] !== diffOrder[b.difficulty])
       return diffOrder[a.difficulty] - diffOrder[b.difficulty];
@@ -80,6 +75,7 @@
     return a.name.localeCompare(b.name);
   });
 
+  // --- Группировка и чередование Windows/Linux внутри каждой сложности ---
   const grouped = {};
   for (const m of list) {
     if (!grouped[m.difficulty]) grouped[m.difficulty] = [];
@@ -101,10 +97,11 @@
     sorted.push(...interleaved, ...other);
   }
 
-  console.log(`Sorted ${sorted.length} machines:`);
+  console.log(`Отсортировано ${sorted.length} машин:`);
   console.table(sorted.map(m => ({ name: m.name, os: m.os, difficulty: m.difficulty })));
 
-  // Optional: copy JSON to clipboard
+  // --- Скопировать JSON в буфер обмена (раскомментируй) ---
   // copy(JSON.stringify(sorted, null, 2));
+
   return sorted;
 })();
