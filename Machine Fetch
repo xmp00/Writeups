@@ -89,3 +89,14 @@
   // copy(JSON.stringify(sorted, null, 2));
   return sorted;
 })();
+
+#Do not copy below this line including.
+#You should see something like
+State active page 1: +20 (unique total: 20)
+index-CfwG98bU.js:1900 State retired page 1: +100 (unique total: 120)
+index-CfwG98bU.js:1900 State retired page 2: +100 (unique total: 220)
+index-CfwG98bU.js:1900 State retired page 3: +100 (unique total: 320)
+index-CfwG98bU.js:1900 State retired page 4: +100 (unique total: 420)
+index-CfwG98bU.js:1900 State retired page 5: +100 (unique total: 520)
+index-CfwG98bU.js:1900 State retired page 6: +21 (unique total: 541)
+index-CfwG98bU.js:1900 Total unique machines: 541
