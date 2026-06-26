@@ -1,9 +1,7 @@
-#Login to HTB
-#Go to Machines
-#Open Developer Tools network tab
-#Paste
+#Login to HTB, open Machines page, open Console and paste below:
 
 (async () => {
+  // --- Auto-detect token ---
   const token = (() => {
     const val = localStorage.getItem('htb-token');
     if (val && val.startsWith('eyJ')) return val;
@@ -18,19 +16,21 @@
   })();
 
   if (!token) { console.error('Token not found'); return; }
+  console.log('Token found');
 
   const base = 'https://labs.hackthebox.com/api/v5/machines';
-  const states = ['active', 'retired'];
-  let all = [];
-  const seen = new Set();
+  const states = ['retired', 'active'];
+  let allMachines = [];
+  const seenIds = new Set();
 
   for (const state of states) {
+    let page = 1;
+    let totalPages = 1;
     const params = new URLSearchParams({
       per_page: 100,
       state: state
     });
-    let page = 1;
-    let total = 1;
+
     do {
       params.set('page', page);
       const res = await fetch(`${base}?${params}`, {
@@ -40,29 +40,45 @@
       const data = await res.json();
       const machines = data.data || data.machines || [];
       for (const m of machines) {
-        const id = m.id || m.name;
-        if (!seen.has(id)) {
-          seen.add(id);
-          all.push(m);
+        if (!seenIds.has(m.id)) {
+          seenIds.add(m.id);
+          allMachines.push(m);
         }
       }
-      total = data.meta?.last_page || data.total_pages || 1;
-      console.log(`State ${state} page ${page}: +${machines.length} (unique total: ${all.length})`);
+      totalPages = data.meta?.last_page || data.total_pages || 1;
+      console.log(`📄 State=${state}, Page ${page}: ${machines.length} machines (unique total: ${allMachines.length})`);
       page++;
-    } while (page <= total);
+    } while (page <= totalPages);
   }
 
-  console.log(`Total unique machines: ${all.length}`);
+  console.log(`Total unique machines fetched: ${allMachines.length}`);
 
-  // Extract and sort
-  const list = all.map(m => ({
-    name: m.name || m.title,
-    os: m.os || m.operating_system || 'Unknown',
-    difficulty: m.difficulty || m.difficulty_text || 'Unknown'
+  // --- Map difficulty (numeric to label) ---
+  const getDifficultyLabel = (num) => {
+    const d = num / 10;
+    if (d < 3.0) return 'Easy';
+    if (d < 4.5) return 'Medium';
+    if (d < 6.5) return 'Hard';
+    return 'Insane';
+  };
+
+  // --- Build list ---
+  const list = allMachines.map(m => ({
+    name: m.name || '',
+    os: m.os || 'Unknown',
+    difficultyNum: m.difficulty,
+    difficulty: getDifficultyLabel(m.difficulty)
   }));
 
-  const difficultyOrder = { 'Easy': 0, 'Medium': 1, 'Hard': 2, 'Insane': 3 };
-  list.sort((a, b) => (difficultyOrder[a.difficulty] ?? 99) - (difficultyOrder[b.difficulty] ?? 99));
+  // --- Sort and interleave ---
+  const diffOrder = { 'Easy': 0, 'Medium': 1, 'Hard': 2, 'Insane': 3 };
+  list.sort((a, b) => {
+    if (diffOrder[a.difficulty] !== diffOrder[b.difficulty])
+      return diffOrder[a.difficulty] - diffOrder[b.difficulty];
+    if (a.os === 'Windows' && b.os !== 'Windows') return -1;
+    if (a.os !== 'Windows' && b.os === 'Windows') return 1;
+    return a.name.localeCompare(b.name);
+  });
 
   const grouped = {};
   for (const m of list) {
@@ -85,18 +101,10 @@
     sorted.push(...interleaved, ...other);
   }
 
-  console.table(sorted);
+  console.log(`Sorted ${sorted.length} machines:`);
+  console.table(sorted.map(m => ({ name: m.name, os: m.os, difficulty: m.difficulty })));
+
+  // Optional: copy JSON to clipboard
   // copy(JSON.stringify(sorted, null, 2));
   return sorted;
 })();
-
-#Do not copy below this line including.
-#You should see something like
-State active page 1: +20 (unique total: 20)
-index-CfwG98bU.js:1900 State retired page 1: +100 (unique total: 120)
-index-CfwG98bU.js:1900 State retired page 2: +100 (unique total: 220)
-index-CfwG98bU.js:1900 State retired page 3: +100 (unique total: 320)
-index-CfwG98bU.js:1900 State retired page 4: +100 (unique total: 420)
-index-CfwG98bU.js:1900 State retired page 5: +100 (unique total: 520)
-index-CfwG98bU.js:1900 State retired page 6: +21 (unique total: 541)
-index-CfwG98bU.js:1900 Total unique machines: 541
