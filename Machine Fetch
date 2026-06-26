@@ -1,0 +1,47 @@
+(async () => {
+  const token = (() => {
+    const val = localStorage.getItem('htb-token');
+    if (val && val.startsWith('eyJ')) return val;
+    // fallback: search all storage
+    for (const s of [localStorage, sessionStorage]) {
+      for (let i = 0; i < s.length; i++) {
+        const key = s.key(i);
+        const v = s.getItem(key);
+        if (v && typeof v === 'string' && v.startsWith('eyJ') && v.length > 100) return v;
+      }
+    }
+    return null;
+  })();
+
+  if (!token) { console.error('Token not found'); return; }
+
+  const base = 'https://labs.hackthebox.com/api/v5/machines';
+  const params = new URLSearchParams({
+    per_page: 100,
+    // Try different state values: 'retired', 'active', 'all'
+    state: 'retired',   // change to 'all' if you want everything
+    // showCompleted: 'incomplete' // REMOVE this line to get all
+  });
+
+  let all = [];
+  let page = 1;
+  let total = 1;
+
+  do {
+    params.set('page', page);
+    const res = await fetch(`${base}?${params}`, {
+      headers: { 'Authorization': `Bearer ${token}`, 'Accept': 'application/json' }
+    });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    const machines = data.data || data.machines || [];
+    all = all.concat(machines);
+    total = data.meta?.last_page || data.total_pages || 1;
+    console.log(`Page ${page}: +${machines.length} (total: ${all.length})`);
+    page++;
+  } while (page <= total);
+
+  console.log(`Fetched ${all.length} machines`);
+  // If still less than 541, try with state=all instead
+  return all;
+})();
